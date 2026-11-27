@@ -18,6 +18,12 @@
 #define NVME_ADMIN_TIMEOUT_MS 60000
 
 /**
+ * Shutdown processing timeout in milliseconds for a controller whose RTD3E is not known, the
+ * lower bound SPDK applies to RTD3E
+ */
+#define NVME_SHUTDOWN_TIMEOUT_MS 10000
+
+/**
  * What a controller is, as another process using it needs to know
  *
  * Values only, no pointers, so it can be handed to another process as it is.
@@ -45,6 +51,10 @@ struct nvme_controller {
 	uint64_t qids[NVME_QID_BITMAP_WORDS]; ///< Allocation status of IO queues
 
 	uint32_t csts; ///< Controller Status Register Value
+
+	/// CSTS.SHST completion timeout in milliseconds; NVME_SHUTDOWN_TIMEOUT_MS from
+	/// nvme_controller_reset_via_bar0(), raised by a caller that knows RTD3E
+	uint32_t shutdown_timeout_ms;
 
 	struct nvme_controller_base base; ///< What another process using it needs to know
 };

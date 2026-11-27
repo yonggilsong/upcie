@@ -166,9 +166,9 @@ fail:
 /**
  * Close a controller opened with nvme_controller_open_dmamem_type1.
  *
- * Disables the controller, releases the admin queue's SQ/CQ back to
- * heap, closes the device fd, and munmaps BAR0. The caller-owned
- * container, group, and dmamem_heap stay alive.
+ * Notifies the controller of shutdown, disables it, releases the admin
+ * queue's SQ/CQ back to heap, closes the device fd, and munmaps BAR0.
+ * The caller-owned container, group, and dmamem_heap stay alive.
  *
  * @param ctrlr  Controller populated by nvme_controller_open_dmamem_type1;
  *               memset to zero on return.
@@ -184,9 +184,11 @@ nvme_controller_close_dmamem_type1(struct nvme_controller *ctrlr, struct nvme_dm
 				   struct dmamem_heap *heap)
 {
 	int first_err = 0;
+	int shn_err = 0;
 	int err;
 
 	if (ctx->bar0) {
+		shn_err = nvme_controller_shutdown_via_bar0(ctrlr, ctx->bar0);
 		nvme_mmio_cc_disable(ctx->bar0);
 		if (ctrlr->base.timeout_ms) {
 			err = nvme_mmio_csts_wait_until_not_ready(ctx->bar0,
@@ -209,6 +211,12 @@ nvme_controller_close_dmamem_type1(struct nvme_controller *ctrlr, struct nvme_dm
 	}
 
 	memset(ctrlr, 0, sizeof(*ctrlr));
+
+	// A shutdown timeout is reported only when the CC.EN=0 sequence and the release that
+	// follow it succeed, so a caller acting on a CSTS.RDY timeout is not shown this instead
+	if (shn_err && !first_err) {
+		first_err = shn_err;
+	}
 
 	return first_err;
 }

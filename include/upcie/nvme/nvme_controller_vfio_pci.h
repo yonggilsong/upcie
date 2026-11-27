@@ -2,11 +2,11 @@
 // Copyright (c) Simon Andreas Frimann Lund <os@safl.dk>
 
 /**
- * NVMe controller bring-up helpers shared across vfio-pci backings
- * ================================================================
+ * NVMe controller bring-up helpers shared across the vfio-pci and uio backings
+ * ============================================================================
  *
  * From a caller-supplied vfio device fd, acquire BAR0 and drive the
- * NVMe controller enable sequence. nvme_controller_open_dmamem_vfio,
+ * NVMe controller enable and shutdown sequence. nvme_controller_open_dmamem_vfio,
  * nvme_controller_open_dmamem_type1 and nvme_controller_open_dmamem_uio
  * share it once they have BAR0; how BAR0 was obtained and how DMA is
  * mapped stay with each caller.
@@ -119,6 +119,7 @@ nvme_controller_reset_via_bar0(struct nvme_controller *ctrlr, uint8_t *bar0, uin
 	ctrlr->base.cap = cap;
 	ctrlr->base.timeout_ms = nvme_reg_cap_get_to(cap) * 500;
 	ctrlr->base.admin_timeout_ms = NVME_ADMIN_TIMEOUT_MS;
+	ctrlr->shutdown_timeout_ms = NVME_SHUTDOWN_TIMEOUT_MS;
 
 	nvme_mmio_cc_disable(bar0);
 
@@ -160,6 +161,50 @@ nvme_controller_enable_via_bar0(struct nvme_controller *ctrlr, uint8_t *bar0, ui
 	err = nvme_mmio_csts_wait_until_ready(bar0, ctrlr->base.timeout_ms);
 	if (err) {
 		UPCIE_DEBUG("FAILED: nvme_mmio_csts_wait_until_ready(); err(%d)", err);
+		return err;
+	}
+
+	return 0;
+}
+
+/**
+ * Notify an enabled controller of a normal shutdown and wait for CSTS.SHST to
+ * report completion.
+ *
+ * CC.EN stays set; the caller disables the controller afterwards with the
+ * CC.EN=0 sequence. A controller with CC.EN=0, or one whose shutdown already
+ * completed, is left as it is.
+ *
+ * @return 0 on success; -EINVAL when ctrlr->shutdown_timeout_ms is 0, as on a
+ * controller that did not come through nvme_controller_reset_via_bar0();
+ * -ETIMEDOUT when CSTS.SHST does not report completion in time.
+ */
+static inline int
+nvme_controller_shutdown_via_bar0(struct nvme_controller *ctrlr, uint8_t *bar0)
+{
+	uint32_t cc;
+	int err;
+
+	if (!ctrlr->shutdown_timeout_ms) {
+		return -EINVAL;
+	}
+
+	cc = nvme_mmio_cc_read(bar0);
+	if (!nvme_reg_cc_get_en(cc)) {
+		return 0;
+	}
+
+	if (nvme_reg_csts_get_shst(nvme_mmio_csts_read(bar0)) == NVME_CSTS_SHST_COMPLETE) {
+		return 0;
+	}
+
+	nvme_mmio_cc_shutdown(bar0, NVME_CC_SHN_NORMAL);
+
+	err = nvme_mmio_csts_wait_until_shutdown_complete(bar0, ctrlr->shutdown_timeout_ms);
+	if (err) {
+		UPCIE_DEBUG("FAILED: nvme_mmio_csts_wait_until_shutdown_complete(); err(%d) "
+			    "csts(0x%" PRIx32 ")",
+			    err, nvme_mmio_csts_read(bar0));
 		return err;
 	}
 
