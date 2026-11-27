@@ -135,9 +135,9 @@ fail:
 /**
  * Close a controller opened with nvme_controller_open_dmamem_uio.
  *
- * Disables the controller, releases the admin queue's SQ/CQ back to
- * heap (using the offsets ctx recorded at open), and unmaps BAR0. The
- * dmamem_heap itself stays with the caller.
+ * Notifies the controller of shutdown, disables it, releases the admin
+ * queue's SQ/CQ back to heap (using the offsets ctx recorded at open),
+ * and unmaps BAR0. The dmamem_heap itself stays with the caller.
  *
  * @param ctrlr  Controller populated by nvme_controller_open_dmamem_uio;
  *               memset to zero on return.
@@ -154,9 +154,11 @@ nvme_controller_close_dmamem_uio(struct nvme_controller *ctrlr, struct nvme_dmam
 				 struct dmamem_heap *heap)
 {
 	int first_err = 0;
+	int shn_err = 0;
 	int err;
 
 	if (ctx->bar0_mapped && ctrlr->func.bars[0].region) {
+		shn_err = nvme_controller_shutdown_via_bar0(ctrlr, ctrlr->func.bars[0].region);
 		nvme_mmio_cc_disable(ctrlr->func.bars[0].region);
 		if (ctrlr->base.timeout_ms) {
 			err = nvme_mmio_csts_wait_until_not_ready(ctrlr->func.bars[0].region,
@@ -180,6 +182,12 @@ nvme_controller_close_dmamem_uio(struct nvme_controller *ctrlr, struct nvme_dmam
 
 	nvme_dmamem_uio_ctx_init(ctx);
 	memset(ctrlr, 0, sizeof(*ctrlr));
+
+	// A shutdown timeout is reported only when the CC.EN=0 sequence and the release that
+	// follow it succeed, so a caller acting on a CSTS.RDY timeout is not shown this instead
+	if (shn_err && !first_err) {
+		first_err = shn_err;
+	}
 
 	return first_err;
 }

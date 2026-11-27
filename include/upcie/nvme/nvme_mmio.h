@@ -239,8 +239,11 @@ nvme_mmio_cc_enable(void *bar0)
 /**
  * Disable the current controller-configuration.
  *
+ * Clears CC.EN (bit 0) and CC.SHN (bits 14-15) in one write, so a shutdown notification is not
+ * left behind.
+ *
  * Note: Disabling takes effect asynchronously. Thus, you must wait for the controller to report
- * CSTS.RDY = 0 before proceeding. Use nvme_mmio_wait_until_not_ready() with a proper timeout
+ * CSTS.RDY = 0 before proceeding. Use nvme_mmio_csts_wait_until_not_ready() with a proper timeout
  * value.
  */
 static inline void
@@ -248,7 +251,7 @@ nvme_mmio_cc_disable(void *bar0)
 {
 	uint32_t cc = nvme_mmio_cc_read(bar0);
 
-	nvme_mmio_cc_write(bar0, cc & ~0x1);
+	nvme_mmio_cc_write(bar0, cc & ~(0x1u | (0x3u << 14)));
 }
 
 /**
@@ -324,16 +327,43 @@ nvme_reg_cap_pr(uint64_t cap)
 	return wrtn;
 }
 
+/**
+ * Controller Status: Shutdown Status (SHST) values
+ */
+#define NVME_CSTS_SHST_NORMAL 0x0    ///< Normal operation, no shutdown in progress
+#define NVME_CSTS_SHST_OCCURRING 0x1 ///< Shutdown processing occurring
+#define NVME_CSTS_SHST_COMPLETE 0x2  ///< Shutdown processing complete
+
+/**
+ * Controller Status: Ready (RDY)
+ * Bit 0
+ */
+static inline uint8_t
+nvme_reg_csts_get_rdy(uint32_t csts)
+{
+	return bitfield_get(csts, 0, 1);
+}
+
+/**
+ * Controller Status: Shutdown Status (SHST)
+ * Bits 2-3
+ */
+static inline uint8_t
+nvme_reg_csts_get_shst(uint32_t csts)
+{
+	return bitfield_get(csts, 2, 2);
+}
+
 static inline int
 nvme_reg_csts_pr(uint32_t val)
 {
 	int wrtn = 0;
 
 	wrtn += printf("nvme_reg_csts:\n");
-	wrtn += printf("  rdy    : %u   # Controller Ready\n", (unsigned)bitfield_get(val, 0, 1));
+	wrtn += printf("  rdy    : %u   # Controller Ready\n", nvme_reg_csts_get_rdy(val));
 	wrtn += printf("  cfs    : %u   # Controller Fatal Status\n",
 		       (unsigned)bitfield_get(val, 1, 1));
-	wrtn += printf("  shst   : %u   # Shutdown Status\n", (unsigned)bitfield_get(val, 2, 2));
+	wrtn += printf("  shst   : %u   # Shutdown Status\n", nvme_reg_csts_get_shst(val));
 	wrtn += printf("  nssro  : %u   # NVM Subsystem Reset Occurred\n",
 		       (unsigned)bitfield_get(val, 4, 1));
 	wrtn += printf("  pp     : %u   # Processing Pause\n", (unsigned)bitfield_get(val, 5, 1));
@@ -391,6 +421,13 @@ nvme_reg_cc_get_cqr(uint32_t cc)
 {
 	return bitfield_get(cc, 16, 1);
 }
+
+/**
+ * Controller Configuration: Shutdown Notification (SHN) values
+ */
+#define NVME_CC_SHN_NONE 0x0   ///< No notification; no effect
+#define NVME_CC_SHN_NORMAL 0x1 ///< Normal shutdown notification
+#define NVME_CC_SHN_ABRUPT 0x2 ///< Abrupt shutdown notification
 
 /**
  * Controller Configuration: Shutdown Notification (SHN)
@@ -512,4 +549,40 @@ static inline uint32_t
 nvme_reg_cc_set_crime(uint32_t cc, uint8_t val)
 {
 	return bitfield_set(cc, 24, 1, val);
+}
+
+/**
+ * Write a shutdown notification into CC.SHN, leaving the other fields as they are
+ *
+ * Note: Shutdown processing takes effect asynchronously. Thus, you must wait for the controller
+ * to report CSTS.SHST = complete before proceeding. Use
+ * nvme_mmio_csts_wait_until_shutdown_complete() with a proper timeout value.
+ *
+ * @param bar0 A memory-mapped region pointing to the start of bar0
+ * @param shn One of NVME_CC_SHN_NORMAL or NVME_CC_SHN_ABRUPT
+ */
+static inline void
+nvme_mmio_cc_shutdown(void *bar0, uint8_t shn)
+{
+	uint32_t cc = nvme_mmio_cc_read(bar0);
+
+	nvme_mmio_cc_write(bar0, nvme_reg_cc_set_shn(cc, shn));
+}
+
+/**
+ * Wait until CSTS.SHST == complete (shutdown processing complete)
+ *
+ * Note: a sound choice for timeout_ms would be RTD3E from Identify Controller, when known. A
+ * controller that has gone away reads CSTS as all ones; this is not told apart from a timeout.
+ */
+static inline int
+nvme_mmio_csts_wait_until_shutdown_complete(void *mmio, int timeout_ms)
+{
+	for (int elapsed = 0; elapsed < timeout_ms; ++elapsed) {
+		if (nvme_reg_csts_get_shst(nvme_mmio_csts_read(mmio)) == NVME_CSTS_SHST_COMPLETE) {
+			return 0;
+		}
+		usleep(1000);
+	}
+	return -ETIMEDOUT;
 }

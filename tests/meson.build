@@ -55,6 +55,7 @@ endforeach
 # Pure host-memory tests needing threads
 thread_test_sources = files(
   'test_nvme_admin_timeout.c',
+  'test_nvme_shutdown.c',
 )
 foreach src : thread_test_sources
   exe = executable(

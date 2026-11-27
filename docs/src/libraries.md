@@ -183,8 +183,10 @@ basic NVMe over PCIe.
   queue, `nvme_admin_sync_dmamem()`, and creating and deleting I/O queue pairs.
 
 `nvme_controller_vfio_pci.h`
-: The bring-up the vfio paths share once they have a device descriptor:
-  acquiring BAR0, and the CC.EN and CSTS.RDY sequence that every path runs.
+: The bring-up and shutdown the vfio and uio paths share once they have
+  BAR0: acquiring it from a vfio device descriptor, the CC.EN and CSTS.RDY
+  enable sequence, and the CC.SHN and CSTS.SHST shutdown sequence that
+  every path runs before it clears CC.EN.
 
 `nvme_qpair.h`
 : A `struct nvme_qpair` for a submission and completion queue pair: enqueue,
