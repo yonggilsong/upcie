@@ -57,13 +57,14 @@ thread_test_sources = files(
   'test_nvme_admin_timeout.c',
 )
 foreach src : thread_test_sources
-  executable(
+  exe = executable(
     fs.stem(src),
     src,
     include_directories: incdir,
     dependencies: dependency('threads'),
     install: true,
   )
+  test(fs.stem(src), exe)
 endforeach
 
 # Tests depending on linking with CUDA
